@@ -1,15 +1,78 @@
 #include <Encoder.h>
 #include <Bounce2.h>
+#include <FastCRC.h>
+#include <EEPROM.h>
 //rotary_volume_mk1.ino
 
 #define LED_PIN 13
 
-class Config
+#define DOUBLE_CLICK_TIMEOUT 500
+#define LONG_PRESS_TIMEOUT 500
+
+FastCRC32 CRC32;
+struct Config
 {
+    uint32_t crc;
+    uint16_t double_click_timeout;
+    uint16_t long_press_timeout;
+
+    void save()
+    {
+        crc = this->calculate_crc32();
+        Serial.print("crc = "); Serial.println(crc, HEX);
+        uint8_t* data = (uint8_t*)this;
+        for(unsigned int i = 0; i < sizeof(Config); i++)
+        {
+            #ifdef USB_SERIAL
+            Serial.print(i, DEC);
+            Serial.print(" = ");
+            Serial.println(*(data + i), HEX);
+            #endif
+            EEPROM.write(i, *(data + i));
+        }
+    }
+    void load()
+    {
+        uint8_t* data = (uint8_t*)this;
+        for(unsigned int i = 0; i < sizeof(Config); i++)
+        {
+            *(data + i) = EEPROM.read(i);
+        }
+        if(this->crc_valid())
+        {
+            #ifdef USB_SERIAL
+            Serial.println("CRC valid!");
+            Serial.print("config->crc = "); Serial.println(this->crc, HEX);
+            Serial.print("config->dcto = "); Serial.println(this->double_click_timeout, DEC);
+            Serial.print("config->lpto = "); Serial.println(this->long_press_timeout, DEC);
+            #endif
+        }
+        else
+        {
+            #ifdef USB_SERIAL
+            Serial.print("Invalid CRC! expected: "); Serial.print(this->calculate_crc32(), HEX);
+            Serial.print(", got: "); Serial.println(this->crc, HEX);
+            Serial.println("Saving default values into eeprom");
+            #endif
+            this->double_click_timeout = DOUBLE_CLICK_TIMEOUT;
+            this->long_press_timeout = LONG_PRESS_TIMEOUT;
+            this->save();
+            #ifdef USB_SERIAL
+            Serial.print("config->dcto = "); Serial.println(this->double_click_timeout, DEC);
+            Serial.print("config->lpto = "); Serial.println(this->long_press_timeout, DEC);
+            #endif
+        }
+    }
 private:
-public:
-    void save(){}
-    void read(){}
+    bool crc_valid()
+    {
+        // return false;
+        return this->crc == this->calculate_crc32();
+    }
+    uint32_t calculate_crc32()
+    {
+        return CRC32.crc32(((uint8_t*)this) + sizeof(uint32_t), sizeof(Config) - sizeof(uint32_t));
+    }
 };
 
 
@@ -56,6 +119,7 @@ public:
 };
 
 Rotary rot1(14, 15, 12);
+Config config;
 
 void setup()
 {
@@ -63,12 +127,12 @@ void setup()
     digitalWrite(LED_PIN, LOW);
 #ifdef USB_SERIAL
     Serial.begin(115200);
+    while(!Serial){}
 #endif
+    config.load();
 }
 
 bool alt_mode_enabled = false;
-#define DOUBLE_CLICK_TIMEOUT 500
-#define LONG_PRESS_TIMEOUT 1000
 enum click_action_t
 {
     NO_CLICK = 0,
@@ -91,7 +155,7 @@ void loop()
     if(rot1.fell())
     {
         held = true;
-        long_press_timeout = millis() + LONG_PRESS_TIMEOUT;
+        long_press_timeout = millis() + config.long_press_timeout;
     }
     else if(rot1.rose())
     {
@@ -103,7 +167,7 @@ void loop()
             if(!did_long_click)
             {
                 one_click = true;
-                double_click_timeout = millis() + DOUBLE_CLICK_TIMEOUT;
+                double_click_timeout = millis() + config.double_click_timeout;
             }
             else
             {
@@ -134,11 +198,13 @@ void loop()
         did_long_click = true;
     }
 
+    #ifndef USB_SERIAL
     uint16_t center_key, left_key, right_key;
 
     center_key = alt_mode_enabled ? KEY_MEDIA_PLAY_PAUSE : KEY_MEDIA_MUTE;
     left_key = alt_mode_enabled ? KEY_MEDIA_PREV_TRACK : KEY_MEDIA_VOLUME_DEC;
     right_key = alt_mode_enabled ? KEY_MEDIA_NEXT_TRACK : KEY_MEDIA_VOLUME_INC;
+    #endif
 
     switch(click_action)
     {
